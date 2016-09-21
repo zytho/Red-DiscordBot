@@ -9,6 +9,7 @@ import os
 import logging
 import asyncio
 
+LEGACY_CLEANUP_DELAY = 0.2
 
 class Mod:
     """Moderation tools."""
@@ -133,7 +134,7 @@ class Mod:
             await self.bot.say("I cannot do that, I lack the "
                 "\"Manage Nicknames\" permission.")
 
-    @commands.group(pass_context=True, no_pm=True)
+    @commands.group(pass_context=True)
     @checks.mod_or_permissions(manage_messages=True)
     async def cleanup(self, ctx):
         """Deletes messages.
@@ -144,7 +145,7 @@ class Mod:
         if ctx.invoked_subcommand is None:
             await send_cmd_help(ctx)
 
-    @cleanup.command(pass_context=True, no_pm=True)
+    @cleanup.command(pass_context=True)
     async def text(self, ctx, text: str, number: int):
         """Deletes last X messages matching the specified text.
 
@@ -159,7 +160,7 @@ class Mod:
         channel = ctx.message.channel
         logger.info("{}({}) deleted {} messages containing '{}' in channel {}".format(author.name,
             author.id, str(number), text, message.channel.name))
-        if self.bot.user.bot and self.discordpy_updated():
+        if self.can_mass_delete():
             def to_delete(m):
                 if m == ctx.message or text in m.content:
                     return True
@@ -177,8 +178,6 @@ class Mod:
     async def legacy_cleanup_text_messages(self, ctx, text, number):
         message = ctx.message
         cmdmsg = ctx.message
-        if self.bot.user.bot:
-            print("Your discord.py is outdated, defaulting to slow deletion.")
         try:
             if number > 0 and number < 10000:
                 while True:
@@ -186,23 +185,23 @@ class Mod:
                     async for x in self.bot.logs_from(message.channel, limit=100, before=message):
                         if number == 0:
                             await self._delete_message(cmdmsg)
-                            await asyncio.sleep(0.25)
+                            await asyncio.sleep(LEGACY_CLEANUP_DELAY)
                             return
                         if text in x.content:
                             await self._delete_message(x)
-                            await asyncio.sleep(0.25)
+                            await asyncio.sleep(LEGACY_CLEANUP_DELAY)
                             number -= 1
                         new = True
                         message = x
                     if not new or number == 0:
                         await self._delete_message(cmdmsg)
-                        await asyncio.sleep(0.25)
+                        await asyncio.sleep(LEGACY_CLEANUP_DELAY)
                         break
         except discord.errors.Forbidden:
             await self.bot.send_message(message.channel, "I need permissions"
                  " to manage messages in this channel.")
 
-    @cleanup.command(pass_context=True, no_pm=True)
+    @cleanup.command(pass_context=True)
     async def user(self, ctx, user: discord.Member, number: int):
         """Deletes last X messages from specified user.
 
@@ -216,7 +215,7 @@ class Mod:
         message = ctx.message
         logger.info("{}({}) deleted {} messages made by {}({}) in channel {}".format(author.name,
             author.id, str(number), user.name, user.id, message.channel.name))
-        if self.bot.user.bot and self.discordpy_updated():
+        if self.can_mass_delete():
             def is_user(m):
                 if m == ctx.message or m.author == user:
                     return True
@@ -230,7 +229,7 @@ class Mod:
         else:
             await self.legacy_cleanup_user_messages(ctx, user, number)
 
-    @cleanup.command(pass_context=True, no_pm=True)
+    @cleanup.command(pass_context=True)
     async def after(self, ctx, message_id : int):
         """Deletes all messages after specified message
 
@@ -264,8 +263,6 @@ class Mod:
         author = ctx.message.author
         message = ctx.message
         cmdmsg = ctx.message
-        if self.bot.user.bot:
-            print("Your discord.py is outdated, defaulting to slow deletion.")
         try:
             if number > 0 and number < 10000:
                 while True:
@@ -273,24 +270,24 @@ class Mod:
                     async for x in self.bot.logs_from(message.channel, limit=100, before=message):
                         if number == 0:
                             await self._delete_message(cmdmsg)
-                            await asyncio.sleep(0.25)
+                            await asyncio.sleep(LEGACY_CLEANUP_DELAY)
                             return
                         if x.author.id == user.id:
                             await self._delete_message(x)
-                            await asyncio.sleep(0.25)
+                            await asyncio.sleep(LEGACY_CLEANUP_DELAY)
                             number -= 1
                         new = True
                         message = x
                     if not new or number == 0:
                         await self._delete_message(cmdmsg)
-                        await asyncio.sleep(0.25)
+                        await asyncio.sleep(LEGACY_CLEANUP_DELAY)
                         break
         except discord.errors.Forbidden:
             await self.bot.send_message(ctx.channel, "I need permissions "
                             "to manage messages in this channel.")
 
 
-    @cleanup.command(pass_context=True, no_pm=True)
+    @cleanup.command(pass_context=True)
     async def messages(self, ctx, number: int):
         """Deletes last X messages.
 
@@ -302,7 +299,7 @@ class Mod:
         channel = ctx.message.channel
         logger.info("{}({}) deleted {} messages in channel {}".format(author.name,
             author.id, str(number), channel.name))
-        if self.bot.user.bot and self.discordpy_updated():
+        if self.can_mass_delete():
             try:
                 await self.bot.purge_from(channel, limit=number+1)
             except discord.errors.Forbidden:
@@ -313,13 +310,11 @@ class Mod:
     async def legacy_cleanup_messages(self, ctx, number):
         author = ctx.message.author
         channel = ctx.message.channel
-        if self.bot.user.bot:
-                print("Your discord.py is outdated, defaulting to slow deletion.")
         try:
             if number > 0 and number < 10000:
                 async for x in self.bot.logs_from(channel, limit=number + 1):
                     await self._delete_message(x)
-                    await asyncio.sleep(0.25)
+                    await asyncio.sleep(LEGACY_CLEANUP_DELAY)
         except discord.errors.Forbidden:
             await self.bot.send_message(channel, "I need permissions to manage messages in this channel.")
 
@@ -631,12 +626,15 @@ class Mod:
             await self.bot.say("That user doesn't have any recorded name or "
                                "nickname change.")
 
-    def discordpy_updated(self):
+    def can_mass_delete(self):
         try:
             assert self.bot.purge_from
         except:
+            if self.bot.user.bot:
+                print("Your discord.py is outdated, falling back on slow "
+                      "deletion.")
             return False
-        return True
+        return self.bot.user.bot
 
     async def _delete_message(self, message):
         try:
