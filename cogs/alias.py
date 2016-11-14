@@ -1,6 +1,6 @@
 from discord.ext import commands
 from .utils.chat_formatting import *
-from .utils.dataIO import fileIO
+from .utils.dataIO import dataIO
 from .utils import checks
 from __main__ import user_allowed, send_cmd_help
 import os
@@ -10,7 +10,8 @@ from copy import deepcopy
 class Alias:
     def __init__(self, bot):
         self.bot = bot
-        self.aliases = fileIO("data/alias/aliases.json", "load")
+        self.file_path = "data/alias/aliases.json"
+        self.aliases = dataIO.load_json(self.file_path)
 
     @commands.group(pass_context=True, no_pm=True)
     async def alias(self, ctx):
@@ -42,7 +43,7 @@ class Alias:
             self.aliases[server.id] = {}
         if command not in self.bot.commands:
             self.aliases[server.id][command] = to_execute
-            fileIO("data/alias/aliases.json", "save", self.aliases)
+            dataIO.save_json(self.file_path, self.aliases)
             await self.bot.say("Alias '{}' added.".format(command))
         else:
             await self.bot.say("Cannot add '{}' because it's a real bot "
@@ -84,7 +85,7 @@ class Alias:
         server = ctx.message.server
         if server.id in self.aliases:
             self.aliases[server.id].pop(command, None)
-            fileIO("data/alias/aliases.json", "save", self.aliases)
+            dataIO.save_json(self.file_path, self.aliases)
         await self.bot.say("Alias '{}' deleted.".format(command))
 
     @alias.command(name="list", pass_context=True, no_pm=True)
@@ -107,15 +108,17 @@ class Alias:
                 await self.bot.say("There are no aliases on this server.")
 
     async def check_aliases(self, message):
-        if (message.author.bot or message.channel.is_private or 
-            not user_allowed(message)):
+        if len(message.content) < 2 or message.channel.is_private:
             return
 
         msg = message.content
         server = message.server
         prefix = self.get_prefix(msg)
 
-        if prefix and server.id in self.aliases:
+        if not prefix:
+            return
+
+        if server.id in self.aliases and user_allowed(message):
             alias = self.first_word(msg[len(prefix):]).lower()
             if alias in self.aliases[server.id]:
                 new_command = self.aliases[server.id][alias]
@@ -150,7 +153,7 @@ class Alias:
                 del self.aliases[sid][alias]
             for alias, command in to_add:  # For fixing caps
                 self.aliases[sid][alias] = command
-        fileIO("data/alias/aliases.json", "save", self.aliases)
+        dataIO.save_json(self.file_path, self.aliases)
 
     def first_word(self, msg):
         return msg.split(" ")[0]
@@ -172,9 +175,9 @@ def check_file():
     aliases = {}
 
     f = "data/alias/aliases.json"
-    if not fileIO(f, "check"):
+    if not dataIO.is_valid_json(f):
         print("Creating default alias's aliases.json...")
-        fileIO(f, "save", aliases)
+        dataIO.save_json(f, aliases)
 
 
 def setup(bot):

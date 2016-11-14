@@ -1,8 +1,3 @@
-from discord.ext import commands
-import discord
-from cogs.utils.settings import Settings
-from cogs.utils.dataIO import dataIO
-from cogs.utils.chat_formatting import inline
 import asyncio
 import os
 import time
@@ -11,6 +6,20 @@ import logging
 import logging.handlers
 import shutil
 import traceback
+
+try:
+    from discord.ext import commands
+    import discord
+except ImportError:
+    print("Discord.py is not installed.\n"
+          "Consult the guide for your operating system "
+          "and do ALL the steps in order.\n"
+          "https://twentysix26.github.io/Red-Docs/\n")
+    sys.exit()
+
+from cogs.utils.settings import Settings
+from cogs.utils.dataIO import dataIO
+from cogs.utils.chat_formatting import inline
 
 #
 #  Red, a Discord bot by Twentysix, based on discord.py and its command extension
@@ -23,7 +32,24 @@ import traceback
 
 description = "Red - A multifunction Discord bot by Twentysix"
 
-formatter = commands.HelpFormatter(show_check_failure=False)
+
+class Formatter(commands.HelpFormatter):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+    def _add_subcommands_to_page(self, max_width, commands):
+        for name, command in sorted(commands, key=lambda t: t[0]):
+            if name in command.aliases:
+                # skip aliases
+                continue
+
+            entry = '  {0:<{width}} {1}'.format(name, command.short_doc,
+                                                width=max_width)
+            shortened = self.shorten(entry)
+            self._paginator.add_line(shortened)
+
+
+formatter = Formatter(show_check_failure=False)
 
 bot = commands.Bot(command_prefix=["_"], formatter=formatter,
                    description=description, pm_help=None)
@@ -115,11 +141,11 @@ def user_allowed(message):
 
     author = message.author
 
-    mod = bot.get_cog('Mod')
-
-    if author.bot:
+    if author.bot or author == bot.user:
         return False
 
+    mod = bot.get_cog('Mod')
+ 
     if mod is not None:
         if settings.owner == author.id:
             return True
@@ -154,16 +180,16 @@ def user_allowed(message):
 async def get_oauth_url():
     try:
         data = await bot.application_info()
-    except AttributeError:
-        return "Your discord.py is outdated. Couldn't retrieve invite link."
+    except Exception as e:
+        return "Couldn't retrieve invite link.Error: {}".format(e)
     return discord.utils.oauth_url(data.id)
 
 async def set_bot_owner():
     try:
         data = await bot.application_info()
         settings.owner = data.owner.id
-    except AttributeError:
-        print("Your discord.py is outdated. Couldn't retrieve owner's ID.")
+    except Exception as e:
+        print("Couldn't retrieve owner's ID. Error: {}".format(e))
         return
     print("{} has been recognized and set as owner.".format(data.owner.name))
 
@@ -398,15 +424,7 @@ def main():
               "discord.py@master#egg=discord.py[voice]")
     print("Official server: https://discord.me/Red-DiscordBot")
     if settings.login_type == "token":
-        try:
-            yield from bot.login(settings.email)
-        except TypeError as e:
-            print(e)
-            msg = ("\nYou are using an outdated discord.py.\n"
-                   "update your discord.py with by running this in your cmd "
-                   "prompt/terminal.\npip3 install --upgrade git+https://"
-                   "github.com/Rapptz/discord.py@async")
-            sys.exit(msg)
+        yield from bot.login(settings.email)
     else:
         yield from bot.login(settings.email, settings.password)
     yield from bot.connect()

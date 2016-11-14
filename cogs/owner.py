@@ -2,7 +2,8 @@ import discord
 from discord.ext import commands
 from cogs.utils import checks
 from __main__ import set_cog, send_cmd_help, settings
-from .utils.dataIO import fileIO
+from .utils.dataIO import dataIO
+from .utils.chat_formatting import pagify, box
 
 import importlib
 import traceback
@@ -45,7 +46,8 @@ class Owner:
     def __init__(self, bot):
         self.bot = bot
         self.setowner_lock = False
-        self.disabled_commands = fileIO("data/red/disabled_commands.json", "load")
+        self.file_path = "data/red/disabled_commands.json"
+        self.disabled_commands = dataIO.load_json(self.file_path)
         self.session = aiohttp.ClientSession(loop=self.bot.loop)
 
     def __unload(self):
@@ -170,7 +172,6 @@ class Owner:
 
         Modified function, originally made by Rapptz"""
         code = code.strip('` ')
-        python = '```py\n{}\n```'
         result = None
 
         global_vars = globals().copy()
@@ -184,13 +185,15 @@ class Owner:
         try:
             result = eval(code, global_vars, locals())
         except Exception as e:
-            await self.bot.say(python.format(type(e).__name__ + ': ' + str(e)))
+            await self.bot.say(box('{}: {}'.format(type(e).__name__, str(e)),
+                                   lang="py"))
             return
 
         if asyncio.iscoroutine(result):
             result = await result
 
-        result = python.format(result)
+        result = str(result)
+
         if not ctx.message.channel.is_private:
             censor = (settings.email, settings.password)
             r = "[EXPUNGED]"
@@ -199,7 +202,8 @@ class Owner:
                     result = result.replace(w, r)
                     result = result.replace(w.lower(), r)
                     result = result.replace(w.upper(), r)
-        await self.bot.say(result)
+        for page in pagify(result, shorten_by=12):
+            await self.bot.say(box(page, lang="py"))
 
     @commands.group(name="set", pass_context=True)
     async def _set(self, ctx):
@@ -211,13 +215,17 @@ class Owner:
     @_set.command(pass_context=True)
     async def owner(self, ctx):
         """Sets owner"""
-        if settings.owner != "id_here":
-            await self.bot.say("Owner ID has already been set.")
-            return
-
         if self.setowner_lock:
             await self.bot.say("A set owner command is already pending.")
             return
+
+        if settings.owner != "id_here":
+            await self.bot.say(
+            "The owner is already set. Remember that setting the owner "
+            "to someone else other than who hosts the bot has security "
+            "repercussions and is *NOT recommended*. Proceed at your own risk."
+            )
+            await asyncio.sleep(3)
 
         await self.bot.say("Confirm in the console that you're the owner.")
         self.setowner_lock = True
@@ -424,7 +432,7 @@ class Owner:
             comm_obj.enabled = False
             comm_obj.hidden = True
             self.disabled_commands.append(command)
-            fileIO("data/red/disabled_commands.json", "save", self.disabled_commands)
+            dataIO.save_json(self.file_path, self.disabled_commands)
             await self.bot.say("Command has been disabled.")
 
     @command_disabler.command()
@@ -432,7 +440,7 @@ class Owner:
         """Enables commands/subcommands"""
         if command in self.disabled_commands:
             self.disabled_commands.remove(command)
-            fileIO("data/red/disabled_commands.json", "save", self.disabled_commands)
+            dataIO.save_json(self.file_path, self.disabled_commands)
             await self.bot.say("Command enabled.")
         else:
             await self.bot.say("That command is not disabled.")
@@ -455,7 +463,7 @@ class Owner:
         except KeyError:
             return KeyError
         for check in comm_obj.checks:
-            if check.__name__ == "is_owner_check":
+            if hasattr(check, "__name__") and check.__name__ == "is_owner_check":
                 return False
         return comm_obj
 
@@ -528,7 +536,8 @@ class Owner:
             server_list[str(i)] = servers[i]
             msg += "{}: {}\n".format(str(i), servers[i].name)
         msg += "\nTo leave a server just type its number."
-        await self.bot.say(msg)
+        for page in pagify(msg, ['\n']):
+            await self.bot.say(page)
         while msg != None:
             msg = await self.bot.wait_for_message(author=owner, timeout=15)
             if msg != None:
@@ -648,7 +657,8 @@ class Owner:
         print(author.name + " requested to be set as owner. If this is you, "
               "type 'yes'. Otherwise press enter.")
         print()
-        print("*DO NOT* set anyone else as owner.")
+        print("*DO NOT* set anyone else as owner. This has security "
+              "repercussions.")
 
         choice = "None"
         while choice.lower() != "yes" and choice == "None":
@@ -660,7 +670,7 @@ class Owner:
             self.setowner_lock = False
             self.owner.hidden = True
         else:
-            print("setowner request has been ignored.")
+            print("The set owner request has been ignored.")
             self.setowner_lock = False
 
     def _get_version(self):
@@ -670,10 +680,12 @@ class Owner:
         return 'Last updated: ``{}``\nCommit: ``{}``\nHash: ``{}``'.format(
             *version)
 
+
 def check_files():
     if not os.path.isfile("data/red/disabled_commands.json"):
         print("Creating empty disabled_commands.json...")
-        fileIO("data/red/disabled_commands.json", "save", [])
+        dataIO.save_json("data/red/disabled_commands.json", [])
+
 
 def setup(bot):
     check_files()
