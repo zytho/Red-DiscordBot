@@ -131,7 +131,7 @@ class selfBot(commands.Bot):
         return msg
 
 bot = selfBot(command_prefix=DEFAULT_PREFIX, formatter=formatter,
-                   description=description, pm_help=False, self_bot=True, max_messages=32768)
+                   description=description, pm_help=False, self_bot=True, max_messages=8192)
 
 settings = Settings()
 
