@@ -529,31 +529,6 @@ class Owner:
     async def servers(self, ctx):
         """Lists and allows to leave servers"""
         owner = ctx.message.author
-        servers = list(self.bot.servers)
-        server_list = {}
-        msg = ""
-        for i in range(0, len(servers)):
-            server_list[str(i)] = servers[i]
-            msg += "{}: {}\n".format(str(i), servers[i].name)
-        msg += "\nTo leave a server just type its number."
-        for page in pagify(msg, ['\n']):
-            await self.bot.say(page)
-        while msg != None:
-            msg = await self.bot.wait_for_message(author=owner, timeout=15)
-            if msg != None:
-                msg = msg.content.strip()
-                if msg in server_list.keys():
-                    await self.leave_confirmation(server_list[msg], owner, ctx)
-                else:
-                    break
-            else:
-                break
-
-    @commands.command(pass_context=True)
-    @checks.is_owner()
-    async def servers(self, ctx):
-        """Lists and allows to leave servers"""
-        owner = ctx.message.author
         servers = sorted(list(self.bot.servers),
                          key=lambda s: s.name.lower())
         msg = ""
@@ -618,25 +593,68 @@ class Owner:
     @commands.command()
     async def info(self):
         """Shows info about Red"""
-        await self.bot.say(
-        "This is an instance of Red, an open source Discord bot created by "
-        "Twentysix and improved by many.\n\n**Github:**\n"
-        "<https://github.com/Twentysix26/Red-DiscordBot/>\n"
-        "**Official server:**\n<https://discord.me/Red-DiscordBot>")
+        author_repo = "https://github.com/Twentysix26"
+        red_repo = author_repo + "/Red-DiscordBot"
+        server_url = "https://discord.me/Red-DiscordBot"
+        dpy_repo = "https://github.com/Rapptz/discord.py"
+        python_url = "https://www.python.org/"
+        since = datetime.datetime(2016, 1, 2, 0, 0)
+        days_since = (datetime.datetime.now() - since).days
+        dpy_version = "[{}]({})".format(discord.__version__, dpy_repo)
+        py_version = "[{}.{}.{}]({})".format(*os.sys.version_info[:3],
+                                             python_url)
+
+        owner = settings.owner if settings.owner != "id_here" else None
+        if owner:
+            owner = discord.utils.get(self.bot.get_all_members(), id=owner)
+            if not owner:
+                try:
+                    owner = await self.bot.get_user_info(settings.owner)
+                except:
+                    owner = None
+        if not owner:
+            owner = "Unknown"
+
+        about = (
+            "This is an instance of [Red, an open source Discord bot]({}) "
+            "created by [Twentysix]({}) and improved by many.\n\n"
+            "Red is backed by a passionate community who contributes and "
+            "creates content for everyone to enjoy. [Join us today]({}) "
+            "and help us improve!\n\n"
+            "".format(red_repo, author_repo, server_url))
+
+        embed = discord.Embed(colour=discord.Colour.red())
+        embed.add_field(name="Instance owned by", value=str(owner))
+        embed.add_field(name="Python", value=py_version)
+        embed.add_field(name="discord.py", value=dpy_version)
+        embed.add_field(name="About Red", value=about, inline=False)
+        embed.set_footer(text="Bringing joy since 02 Jan 2016 (over "
+                         "{} days ago!)".format(days_since))
+
+        try:
+            await self.bot.say(embed=embed)
+        except discord.HTTPException:
+            await self.bot.say("I need the `Embed links` permission "
+                               "to send this")
 
     @commands.command()
     async def uptime(self):
         """Shows Red's uptime"""
-        up = abs(self.bot.uptime - int(time.perf_counter()))
-        up = str(datetime.timedelta(seconds=up))
-        await self.bot.say("`Uptime: {}`".format(up))
+        now = datetime.datetime.now()
+        uptime = (now - self.bot.uptime).seconds
+        uptime = datetime.timedelta(seconds=uptime)
+        await self.bot.say("`Uptime: {}`".format(uptime))
 
     @commands.command()
     async def version(self):
         """Shows Red's current version"""
         response = self.bot.loop.run_in_executor(None, self._get_version)
         result = await asyncio.wait_for(response, timeout=10)
-        await self.bot.say(result)
+        try:
+            await self.bot.say(embed=result)
+        except discord.HTTPException:
+            await self.bot.say("I need the `Embed links` permission "
+                               "to send this")
 
     def _load_cog(self, cogname):
         if not self._does_cogfile_exist(cogname):
@@ -691,12 +709,27 @@ class Owner:
             self.setowner_lock = False
 
     def _get_version(self):
-        getversion = os.popen(r'git show -s HEAD --format="%cr|%s|%h"')
-        getversion = getversion.read()
-        version = getversion.split('|')
-        return 'Last updated: ``{}``\nCommit: ``{}``\nHash: ``{}``'.format(
-            *version)
+        url = os.popen(r'git config --get remote.origin.url')
+        url = url.read().strip()[:-4]
+        repo_name = url.split("/")[-1]
+        commits = os.popen(r'git show -s -n 3 HEAD --format="%cr|%s|%H"')
+        ncommits = os.popen(r'git rev-list --count HEAD').read()
 
+        lines = commits.read().split('\n')
+        embed = discord.Embed(title="Updates of " + repo_name,
+                              description="Last three updates",
+                              colour=discord.Colour.red(),
+                              url=url)
+        for line in lines:
+            if not line:
+                continue
+            when, commit, chash = line.split("|")
+            commit_url = url + "/commit/" + chash
+            content = "[{}]({}) - {} ".format(chash[:6], commit_url, commit)
+            embed.add_field(name=when, value=content, inline=False)
+        embed.set_footer(text="Total commits: " + ncommits)
+
+        return embed
 
 def check_files():
     if not os.path.isfile("data/red/disabled_commands.json"):
