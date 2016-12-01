@@ -1,9 +1,3 @@
-from discord.ext import commands
-from discord.ext.commands.bot import _get_variable
-import discord
-from cogs.utils.settings import Settings
-from cogs.utils.dataIO import dataIO
-from cogs.utils.chat_formatting import inline
 import asyncio
 import os
 import time
@@ -12,8 +6,34 @@ import logging
 import logging.handlers
 import shutil
 import traceback
+import datetime
 import functools
 from getpass import getpass
+
+try:
+    assert sys.version_info >= (3, 5)
+    from discord.ext import commands
+    from discord.ext.commands.bot import _get_variable
+    from discord.ext.commands.errors import CommandInvokeError
+    import discord
+except ImportError:
+    print("Discord.py is not installed.\n"
+          "Consult the guide for your operating system "
+          "and do ALL the steps in order.\n"
+          "https://twentysix26.github.io/Red-Docs/\n")
+    sys.exit()
+except AssertionError:
+    print("Red needs Python 3.5 or superior.\n"
+          "Consult the guide for your operating system "
+          "and do ALL the steps in order.\n"
+          "https://twentysix26.github.io/Red-Docs/\n")
+    sys.exit()
+
+from cogs.utils.settings import Settings
+from cogs.utils.dataIO import dataIO
+from cogs.utils.chat_formatting import inline
+from collections import Counter
+
 
 #
 #  Red, a Discord bot by Twentysix, based on discord.py and its command extension
@@ -27,7 +47,7 @@ from getpass import getpass
 DEFAULT_PREFIX = []
 DELETE_PREFIX = 'd'  # Prepend prefix with this to delete trigger message
 APPEND_PREFIX = 'a'  # prepend prefix with this to leave trigger message
-EDIT_PREFIX = 's'  # default behavior, used in short
+EDIT_PREFIX = 's'    # default behavior, used in short
 
 selfs = ['self,', 'self, ']
 short_prefix = '!'
@@ -37,12 +57,12 @@ for pp in (DELETE_PREFIX, APPEND_PREFIX, EDIT_PREFIX):
             p = pp + p
         DEFAULT_PREFIX.append(p)
     DEFAULT_PREFIX.append(pp + short_prefix)
+DEFAULT_PREFIX = sorted(DEFAULT_PREFIX, reverse=True)
 
 
 description = ("Red Selfbot - A multifunction Discord bot by Twentysix, "
-               "modified by CalebJ to be run as a self-bot.")
+               "modified by CalebJ to be run as a selfbot.")
 
-formatter = commands.HelpFormatter(show_check_failure=False)
 
 def inject_context(ctx, coro):
     @functools.wraps(coro)
@@ -59,16 +79,24 @@ def inject_context(ctx, coro):
         return ret
     return wrapped
 
+
 # Override inject_context function to pass full ctx
 commands.core.inject_context = inject_context
 
+
 class selfBot(commands.Bot):
-    def say(self, content, *args, **kwargs):
+    def __init__(self, *args, **kwargs):
+        self.counter = Counter()
+        self.uptime = datetime.datetime.now()
+        self._message_modifiers = []
+        self.settings = Settings()
+        super().__init__(*args, **kwargs)
+
+    def say(self, content=None, *args, **kwargs):
         ctx = _get_variable('_internal_context')
-        author = ctx.message.author
         destination = ctx.message.channel
 
-        extensions = ('delete_after','delete_before')
+        extensions = ('delete_after', 'delete_before')
         params = {k: kwargs.pop(k, None) for k in extensions}
 
         selfedit = (not ctx.prefix.startswith(APPEND_PREFIX) and
@@ -80,7 +108,8 @@ class selfBot(commands.Bot):
                 coro = asyncio.sleep(0)
                 params['delete_before'] = ctx.message
             else:
-                coro = self.edit_message(ctx.message, content)
+                coro = self.edit_message(ctx.message, new_content=content,
+                                         *args, **kwargs)
         else:
             coro = self.send_message(destination, content, *args, **kwargs)
         return self._augmented_msg(coro, **params)
@@ -90,24 +119,12 @@ class selfBot(commands.Bot):
 
     def upload(self, *args, **kwargs):
         ctx = _get_variable('_internal_context')
-        author = ctx.message.author
         destination = ctx.message.channel
 
-        extensions = ('delete_after','delete_before')
+        extensions = ('delete_after', 'delete_before')
         params = {k: kwargs.pop(k, None) for k in extensions}
 
-        selfedit = (not ctx.prefix.startswith(APPEND_PREFIX) and 
-                    not ctx.message.edited_timestamp)
-        selfdel = ctx.prefix.startswith(DELETE_PREFIX)
-
-        if selfedit or selfdel:
-            # can't edit when uploading, delete old instead
-            params['delete_before'] = ctx.message
-            if selfdel:
-                # Why are we using delete on an upload? Hell if I know.
-                coro = asyncio.sleep(0)
-            else:
-                coro = self.send_file(destination, *args, **kwargs)
+        coro = self.send_file(destination, *args, **kwargs)
         return self._augmented_msg(coro, **params)
 
     @asyncio.coroutine
@@ -130,10 +147,108 @@ class selfBot(commands.Bot):
 
         return msg
 
-bot = selfBot(command_prefix=DEFAULT_PREFIX, formatter=formatter,
-                   description=description, pm_help=False, self_bot=True, max_messages=8192)
+    async def send_message(self, *args, **kwargs):
+        if self._message_modifiers:
+            if "content" in kwargs:
+                pass
+            elif len(args) == 2:
+                args = list(args)
+                kwargs["content"] = args.pop()
+            else:
+                return await super().send_message(*args, **kwargs)
 
-settings = Settings()
+            content = kwargs['content']
+            for m in self._message_modifiers:
+                try:
+                    content = str(m(content))
+                except:   # Faulty modifiers should not
+                    pass  # break send_message
+            kwargs['content'] = content
+
+        return await super().send_message(*args, **kwargs)
+
+    def add_message_modifier(self, func):
+        """
+        Adds a message modifier to the bot
+
+        A message modifier is a callable that accepts a message's
+        content as the first positional argument.
+        Before a message gets sent, func will get called with
+        the message's content as the only argument. The message's
+        content will then be modified to be the func's return
+        value.
+        Exceptions thrown by the callable will be catched and
+        silenced.
+        """
+        if not callable(func):
+            raise TypeError("The message modifier function "
+                            "must be a callable.")
+
+        self._message_modifiers.append(func)
+
+    def remove_message_modifier(self, func):
+        """Removes a message modifier from the bot"""
+        if func not in self._message_modifiers:
+            raise RuntimeError("Function not present in the message "
+                               "modifiers.")
+
+        self._message_modifiers.remove(func)
+
+    def clear_message_modifiers(self):
+        """Removes all message modifiers from the bot"""
+        self._message_modifiers.clear()
+
+    async def send_cmd_help(self, ctx):
+        if ctx.invoked_subcommand:
+            pages = bot.formatter.format_help_for(ctx, ctx.invoked_subcommand)
+            for page in pages:
+                await bot.send_message(ctx.message.channel, page)
+        else:
+            pages = bot.formatter.format_help_for(ctx, ctx.command)
+            for page in pages:
+                await bot.send_message(ctx.message.channel, page)
+
+    def user_allowed(self, message):
+        return message.author.id == bot.user.id
+
+
+class Formatter(commands.HelpFormatter):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+    def _add_subcommands_to_page(self, max_width, commands):
+        for name, command in sorted(commands, key=lambda t: t[0]):
+            if name in command.aliases:
+                # skip aliases
+                continue
+
+            entry = '  {0:<{width}} {1}'.format(name, command.short_doc,
+                                                width=max_width)
+            shortened = self.shorten(entry)
+            self._paginator.add_line(shortened)
+
+
+def prefix_manager(bot, message):
+    """
+    Returns prefixes of the message's server if set.
+    If none are set or if the message's server is None
+    it will return the global prefixes instead.
+
+    Requires a Bot instance and a Message object to be
+    passed as arguments.
+    """
+    return bot.settings.get_prefixes(message.server)
+
+
+formatter = Formatter(show_check_failure=False)
+
+bot = selfBot(command_prefix=prefix_manager, formatter=formatter,
+              description=description, pm_help=False, self_bot=True, max_messages=8192)
+
+send_cmd_help = bot.send_cmd_help  # Backwards
+user_allowed = bot.user_allowed    # compatibility
+
+settings = bot.settings
 
 
 @bot.event
@@ -156,19 +271,22 @@ async def on_ready():
     print("{} users".format(users))
     print("\n{}/{} active cogs with {} commands".format(
         len(bot.cogs), total_cogs, len(bot.commands)))
-    prefix_label = "Prefixes:" if len(bot.command_prefix) > 1 else "Prefix:"
-    print("{} {}\n".format(prefix_label, " ".join(bot.command_prefix)))
+    prefix_label = "Prefixes:" if len(settings.prefixes) > 1 else "Prefix:"
+    print("{} {}\n".format(prefix_label, " ".join(settings.prefixes)))
     await bot.get_cog('Owner').disable_commands()
 
 
 @bot.event
 async def on_command(command, ctx):
-    pass
+    bot.counter["processed_commands"] += 1
+
 
 @bot.event
 async def on_message(message):
-    if user_allowed(message):
+    bot.counter["messages_read"] += 1
+    if bot.user_allowed(message):
         await bot.process_commands(message)
+
 
 @bot.event
 async def on_command_error(error, ctx):
@@ -178,7 +296,7 @@ async def on_command_error(error, ctx):
         await send_cmd_help(ctx)
     elif isinstance(error, commands.DisabledCommand):
         await bot.send_message(ctx.message.channel,
-            "That command is disabled.")
+                               "That command is disabled.")
     elif isinstance(error, commands.CommandInvokeError):
         logger.exception("Exception in command '{}'".format(
             ctx.command.qualified_name), exc_info=error.original)
@@ -193,6 +311,7 @@ async def on_command_error(error, ctx):
     else:
         logger.exception(type(error).__name__, exc_info=error)
 
+
 async def send_cmd_help(ctx):
     if ctx.invoked_subcommand:
         pages = bot.formatter.format_help_for(ctx, ctx.invoked_subcommand)
@@ -202,10 +321,6 @@ async def send_cmd_help(ctx):
         pages = bot.formatter.format_help_for(ctx, ctx.command)
         for page in pages:
             await bot.send_message(ctx.message.channel, page)
-
-
-def user_allowed(message):
-    return message.author.id == bot.user.id
 
 
 def check_folders():
@@ -236,15 +351,6 @@ def check_configs():
                   "process.")
             exit(1)
 
-        #print("\Choose your prefix:")
-        #confirmation = False
-        #while confirmation is False:
-            #new_prefix = ensure_reply("\nPrefix> ").strip()
-            #print("\nAre you sure you want {0} as your prefix?\nYou "
-                  #"will be able to issue commands like this: {0}help"
-                  #"\nType yes to confirm or no to change it".format(new_prefix))
-            #confirmation = get_answer()
-
         settings.prefixes = DEFAULT_PREFIX
         settings.owner = "id_here"
 
@@ -255,6 +361,7 @@ def check_configs():
     if not os.path.isfile("data/red/cogs.json"):
         print("Creating new cogs.json...")
         dataIO.save_json("data/red/cogs.json", {})
+
 
 def set_logger():
     global logger
@@ -288,11 +395,13 @@ def set_logger():
     logger.addHandler(fhandler)
     logger.addHandler(stdout_handler)
 
+
 def ensure_reply(msg):
     choice = ""
     while choice == "":
         choice = input(msg)
     return choice
+
 
 def get_answer():
     choices = ("yes", "y", "no", "n")
@@ -304,10 +413,12 @@ def get_answer():
     else:
         return False
 
+
 def set_cog(cog, value):
     data = dataIO.load_json("data/red/cogs.json")
     data[cog] = value
     dataIO.save_json("data/red/cogs.json", data)
+
 
 def load_cogs():
     try:
@@ -371,45 +482,56 @@ def load_cogs():
 
     return owner_cog
 
-def main():
+
+def run():
     global settings
 
     check_folders()
     check_configs()
     set_logger()
     owner_cog = load_cogs()
-    if settings.prefixes != []:
-        bot.command_prefix = settings.prefixes
-    else:
+    if settings.prefixes == []:
         print("No prefix set. Defaulting to " + short_prefix)
-        bot.command_prefix = [short_prefix]
+        settings.prefixes = [short_prefix]
         print("Use !set prefix to set it.")
         owner_cog.owner.hidden = True  # Hides the set owner command from help
     print("-- Logging in.. --")
     if settings.login_type == "token":
-        yield from bot.login(settings.email, bot = False)
+        yield from bot.login(settings.email, bot=False)
     else:
         yield from bot.login(settings.email, settings.password)
     yield from bot.connect()
 
-if __name__ == '__main__':
+
+def main():
+    error = False
     loop = asyncio.get_event_loop()
     try:
-        loop.run_until_complete(main())
+        loop.run_until_complete(run())
     except discord.LoginFailure:
+        error = True
         logger.error(traceback.format_exc())
         choice = input("Invalid login credentials. "
-            "If they worked before Discord might be having temporary "
-            "technical issues.\nIn this case, press enter and "
-            "try again later.\nOtherwise you can type 'reset' to "
-            "delete the current configuration and redo the setup process "
-            "again the next start.\n> ")
+                       "If they worked before Discord might be having temporary "
+                       "technical issues.\nIn this case, press enter and "
+                       "try again later.\nOtherwise you can type 'reset' to "
+                       "delete the current configuration and redo the setup process "
+                       "again the next start.\n> ")
         if choice.strip() == "reset":
             shutil.copy('data/red/settings.json',
                         'data/red/settings-{}.bak'.format(int(time.time())))
             os.remove('data/red/settings.json')
+    except KeyboardInterrupt:
+        loop.run_until_complete(bot.logout())
     except:
+        error = True
         logger.error(traceback.format_exc())
         loop.run_until_complete(bot.logout())
     finally:
         loop.close()
+        if error:
+            exit(1)
+
+
+if __name__ == '__main__':
+    main()
