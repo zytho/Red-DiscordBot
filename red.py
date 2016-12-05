@@ -191,6 +191,7 @@ class RedCore:
 
     async def on_ready(self):
         owner_cog = self.bot.get_cog('Owner')
+        loaded_cogs = len([c for c in self.bot.cogs if c != 'RedCore'])
         total_cogs = len(owner_cog._list_cogs())
         users = len(set(self.bot.get_all_members()))
         servers = len(self.bot.servers)
@@ -208,7 +209,7 @@ class RedCore:
         print("{} channels".format(channels))
         print("{} users".format(users))
         print("\n{}/{} active cogs with {} commands".format(
-            len(self.bot.cogs), total_cogs, len(self.bot.commands)))
+              loaded_cogs, total_cogs, len(self.bot.commands)))
         prefixes = self.bot.settings.prefixes
         prefix_label = "Prefixes:" if len(prefixes) > 1 else "Prefix:"
         print("{} {}\n".format(prefix_label, " ".join(prefixes)))
